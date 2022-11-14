@@ -6,57 +6,68 @@ resource "aws_api_gateway_rest_api" "rest_api" {
   name = "${var.api_name}-${var.env_name}"
 }
 
-resource "aws_api_gateway_resource" "rest_api_resource" {
-  rest_api_id = aws_api_gateway_rest_api.rest_api.id
-  parent_id   = aws_api_gateway_rest_api.rest_api.root_resource_id
-  path_part   = "restaurants"
+data "aws_api_gateway_rest_api" "rest_api" {
+  name = "${var.api_name}-${var.env_name}"
+  depends_on = [
+    aws_api_gateway_rest_api.rest_api
+  ]
 }
 
-resource "aws_api_gateway_method" "rest_api_get_method" {
-  rest_api_id   = aws_api_gateway_rest_api.rest_api.id
-  resource_id   = aws_api_gateway_resource.rest_api_resource.id
-  http_method   = "GET"
-  authorization = "NONE"
+module "list-restaurants-api" {
+  source = "./modules/api-gateway"
 
+  api_name = "${var.api_name}-${var.env_name}"
+  parent_id = data.aws_api_gateway_rest_api.rest_api.root_resource_id
+  path     = "restaurants"
+  method   = "GET"
+  integration = {
+    type   = "HTTP"
+    method = "GET"
+    uri    = "https://alb-dev.speedy.zizzi.co.uk/restaurants"
+  }
   request_parameters = {
     "method.request.header.x-brand" = true
   }
-}
-
-resource "aws_api_gateway_integration" "rest_api_get_method_integration" {
-  rest_api_id             = aws_api_gateway_rest_api.rest_api.id
-  resource_id             = aws_api_gateway_resource.rest_api_resource.id
-  http_method             = aws_api_gateway_method.rest_api_get_method.http_method
-  integration_http_method = "GET"
-  type                    = "HTTP"
-  uri                     = "https://alb-dev.speedy.zizzi.co.uk/restaurants"
-
-  request_parameters = {
+  integration_request_parameters = {
     "integration.request.header.x-brand" = "method.request.header.x-brand"
   }
+
+  depends_on = [
+    aws_api_gateway_rest_api.rest_api
+  ]
 }
 
-resource "aws_api_gateway_method_response" "rest_api_get_method_response_200" {
-  rest_api_id = aws_api_gateway_rest_api.rest_api.id
-  resource_id = aws_api_gateway_resource.rest_api_resource.id
-  http_method = aws_api_gateway_method.rest_api_get_method.http_method
-  status_code = 200
-}
+module "get-restaurant-api" {
+  source = "./modules/api-gateway"
 
-resource "aws_api_gateway_integration_response" "rest_api_get_method_integration_response" {
-  rest_api_id = aws_api_gateway_rest_api.rest_api.id
-  resource_id = aws_api_gateway_resource.rest_api_resource.id
-  http_method = aws_api_gateway_method.rest_api_get_method.http_method
-  status_code = aws_api_gateway_method_response.rest_api_get_method_response_200.status_code
+  api_name = "${var.api_name}-${var.env_name}"
+  parent_id = module.list-restaurants-api.aws_api_gateway_resource_id
+  path     = "{restaurantId}"
+  method   = "GET"
+  integration = {
+    type   = "HTTP"
+    method = "GET"
+    uri    = "https://alb-dev.speedy.zizzi.co.uk/restaurants/{restaurantId}"
+  }
+  request_parameters = {
+    "method.request.path.restaurantId" = true
+  }
+  integration_request_parameters = {
+    "integration.request.path.restaurantId" = "method.request.path.restaurantId"
+  }
+
+  depends_on = [
+    aws_api_gateway_rest_api.rest_api,
+    module.list-restaurants-api.aws_api_gateway_resource_id
+  ]
 }
 
 resource "aws_api_gateway_deployment" "rest_api_deployment" {
-  rest_api_id = aws_api_gateway_rest_api.rest_api.id
+  rest_api_id = data.aws_api_gateway_rest_api.rest_api.id
   triggers = {
     redeployment = sha1(jsonencode([
-      aws_api_gateway_resource.rest_api_resource.id,
-      aws_api_gateway_method.rest_api_get_method.id,
-      aws_api_gateway_integration.rest_api_get_method_integration.id
+      module.list-restaurants-api.aws_api_gateway_resource_id,
+      module.get-restaurant-api.aws_api_gateway_resource_id
     ]))
   }
 
@@ -64,10 +75,27 @@ resource "aws_api_gateway_deployment" "rest_api_deployment" {
     create_before_destroy = true
   }
 
+  depends_on = [
+    aws_api_gateway_rest_api.rest_api,
+    module.list-restaurants-api.aws_api_gateway_resource_id,
+    module.list-restaurants-api.aws_api_gateway_resource_method_id,
+    module.list-restaurants-api.aws_api_gateway_integration_id,
+    module.list-restaurants-api.aws_api_gateway_resource_method_response_id,
+    module.list-restaurants-api.aws_api_gateway_integration_response_id,
+    module.get-restaurant-api.aws_api_gateway_resource_id,
+    module.get-restaurant-api.aws_api_gateway_resource_method_id,
+    module.get-restaurant-api.aws_api_gateway_integration_id,
+    module.get-restaurant-api.aws_api_gateway_resource_method_response_id,
+    module.get-restaurant-api.aws_api_gateway_integration_response_id,
+  ]
 }
 
 resource "aws_api_gateway_stage" "rest_api_stage" {
   deployment_id = aws_api_gateway_deployment.rest_api_deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.rest_api.id
-  stage_name    = "${var.stage_name}-${var.env_name}"
+  rest_api_id   = data.aws_api_gateway_rest_api.rest_api.id
+  stage_name    = "${var.api_name}-${var.env_name}"
+
+  depends_on = [
+    aws_api_gateway_deployment.rest_api_deployment
+  ]
 }
